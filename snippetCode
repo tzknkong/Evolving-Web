@@ -1,0 +1,204 @@
+interface CategoryItem {
+    id: string;
+    name: string;
+    children?: CategoryItem[];
+}
+
+// Define the structure for category data to ensure type safety 
+// and make it easier to work with hierarchical data in the menu.
+
+interface SideMenuProps {
+    isMobile?: boolean; // Determines if the menu should render a mobile-friendly layout.
+    show?: boolean;     // Controls whether the menu is visible or not.
+    onClose?: (isVisible: boolean) => void; // Callback to notify the parent component when the menu is closed.
+}
+
+// Centralized API Service for data fetching
+class MenuDataService {
+    static async fetchCategories(): Promise<CategoryItem[]> {
+        try {
+            const dashboardApi = new DashboardControllerApi(genApiConfig());
+            return await dashboardApi.getDashboardSortUsingGET();
+        } catch (error) {
+            console.error('Failed to fetch categories:', error);
+            return [];
+        }
+    }
+
+    static async fetchCollections(): Promise<CategoryItem[]> {
+        try {
+            const categoryApi = new CategoryControllerApi(genApiConfig());
+            return await categoryApi.getAllCollectionUsingGET();
+        } catch (error) {
+            console.error('Failed to fetch collections:', error);
+            return [];
+        }
+    }
+}
+
+// Create a reusable service to fetch data from APIs. This keeps the component code clean
+// and makes the API calls reusable across other parts of the application.
+
+// Logout Service
+class AuthService {
+    static async logout(): Promise<boolean> {
+        try {
+            const lastMsg = localStorage.getItem(PATH.LAST_MSG);
+
+            const response = await fetch(
+                `${process.env.REACT_APP_OAUTH_SERVER_URL}/oauth/logout`, 
+                {
+                    method: "GET",
+                    headers: {
+                        Authorization: `bearer ${Storage.instance.accessToken}`,
+                    },
+                }
+            );
+
+            if (!response.ok) {
+                throw new Error('Logout failed');
+            }
+
+            localStorage.clear(); // Clear sensitive data on logout for security reasons.
+            if (lastMsg) {
+                localStorage.setItem(PATH.LAST_MSG, lastMsg); // Restore necessary information if required.
+            }
+
+            return true; // Return success to notify the calling function.
+        } catch (error) {
+            console.error('Logout error:', error); // Log any errors for debugging purposes.
+            return false;
+        }
+    }
+}
+
+// Abstracting logout logic into a service ensures better code reusability and testability.
+// provides a centralized location to handle related side effects.
+
+// Functional Component
+const SideMenu: FC<SideMenuProps> = ({ 
+    isMobile = false, // Default value for mobile view for better responsiveness.
+    show = false,     // Default to not showing the menu initially.
+    onClose           // Callback function passed from parent for menu close events.
+}) => {
+
+    const [isSelected, setIsSelected] = useState(false); // Tracks if a submenu is selected.
+    const [categories, setCategories] = useState<CategoryItem[]>([]); // Stores fetched category data.
+    const [collections, setCollections] = useState<CategoryItem[]>([]); // Stores fetched collection data.
+
+    // Hooks for Navigation and Dispatch
+    const navigate = useNavigate(); // Provides declarative navigation functionality.
+    const dispatch = useDispatch(); // Allows interaction with the Redux store.
+    const { t, i18n } = useTranslation(); // Enables internationalization for text translations.
+
+    // Memoized data fetching
+    const fetchMenuData = useCallback(async () => {
+        const [fetchedCategories, fetchedCollections] = await Promise.all([
+            MenuDataService.fetchCategories(),
+            MenuDataService.fetchCollections()
+        ]);
+
+        setCategories(fetchedCategories); // Update state with fetched categories.
+        setCollections(fetchedCollections); // Update state with fetched collections.
+    }, []);
+
+    // useCallback ensures fetchMenuData isn't re-created unnecessarily,
+    // optimizing performance and avoiding redundant API calls.
+
+    // Effect for data fetching
+    useEffect(() => {
+        fetchMenuData(); // Fetch data when the component mounts or dependencies change.
+    }, [fetchMenuData]);
+
+    // Handle logout logic
+    const handleLogout = async () => {
+        const logoutSuccess = await AuthService.logout();
+        
+        if (logoutSuccess) {
+            dispatch(handleUserInfo()); // Update Redux store to reflect logout state.
+            navigate(PATH.HOME_PATH);  // Navigate to the home page.
+            window.location.reload(); // Refresh to ensure a clean state after logout.
+        } else {
+            navigate(PATH.HOME_PATH); // Navigate to the home page as a fallback.
+        }
+    };
+
+    // Closes the side menu
+    const closeNavigation = () => {
+        setIsSelected(false); // Reset submenu selection state.
+        onClose?.(false);    // Notify the parent component.
+    };
+
+    // Language change logic
+    const changeLanguage = (lang: string) => {
+        i18n.changeLanguage(lang); // Update the application's language.
+        StorageUtil.setReaderConfig("lang", lang); // Persist the language selection in storage.
+    };
+
+    // Recursive menu rendering
+    const renderMenuItems = (items: CategoryItem[]) => (
+        <ul>
+            {items.map((item, index) => (
+                <li key={item.id || index}>
+                    {item.name}
+                    {item.children && renderMenuItems(item.children)} // Recursively render nested items.
+                </li>
+            ))}
+        </ul>
+    );
+
+    // Conditional Rendering Logic
+    if (!show) return null; // If the menu isn't visible, render nothing.
+
+    return (
+        <div className={style.sideMenuContainer}>
+            {/* Overlay */}
+            <div 
+                className={style.background_sidemenu} 
+                onClick={closeNavigation} 
+            />
+
+            <div className={isMobile ? style.sideMenuMobile : style.sideMenu}>
+                {/* Mobile Back Navigation */}
+                {isMobile && isSelected && (
+                    <div 
+                        className={style.back} 
+                        onClick={() => setIsSelected(false)}
+                    >
+                        {t('common.back')}
+                    </div>
+                )}
+
+                <nav className={style.nav}>
+                    {/* Conditional Menu Rendering */}
+                    {(isSelected || !isMobile) ? (
+                        <>
+                            {renderMenuItems(categories)} // Render fetched categories.
+                            {renderMenuItems(collections)} // Render fetched collections.
+
+                            {/* Language Switcher */}
+                            <button onClick={() => changeLanguage('cht')}>
+                                {t('language.traditional_chinese')}
+                            </button>
+
+                            {/* Logout Button */}
+                            <Button onClick={handleLogout}>
+                                {t('auth.logout')}
+                            </Button>
+                        </>
+                    ) : (
+                        <ul>
+                            <li>
+                                <Link to={PATH.HOME_PATH}>
+                                    {t('common.home')}
+                                </Link>
+                            </li>
+                        </ul>
+                    )}
+                </nav>
+            </div>
+        </div>
+    );
+};
+
+export default SideMenu;
